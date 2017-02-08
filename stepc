@@ -1,0 +1,668 @@
+#!/usr/bin/perl
+
+$KEYWORD = "M_S_X";
+
+%count_all;
+@count_all{"lines","source","space","comments","src_com",
+		   "a_lines","a_source","a_space","a_comments","a_src_com",
+		   "c_lines","c_source","c_space","c_comments","c_src_com"}
+		= (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+
+if(-f $ARGV[0]){
+	print_form(1);
+	$file_type = file_type_check($ARGV[0]);
+	%count_all = step_count(0, $ARGV[0], $file_type);	# Call Step Counter with "Step count mode".
+	print_form(2);
+}
+elsif((($ARGV[0] =~ /^@@\/.+/)||(-d $ARGV[0]))&&(-d $ARGV[1])){
+	$base_src_dir = $ARGV[0];
+	$base_dst_leng = length( $ARGV[1] );
+	%count_all = subdir( $ARGV[1] );		# Sub directory serch with difference check
+	print_form(4);
+}
+elsif(-d $ARGV[0]){
+	%count_all = subdir( $ARGV[0] );		# Sub directory serch with no difference check 
+	print_form(3);
+}
+elsif(($ARGV[0] eq "-s")&&(-f $ARGV[1])){
+	$file_type = file_type_check($ARGV[1]);
+	step_count(1, $ARGV[1], $file_type);	# Call Step Counter with "Source extract mode".
+}
+elsif(($ARGV[0] eq "-c")&&(-f $ARGV[1])){
+	$file_type = file_type_check($ARGV[1]);
+	step_count(2, $ARGV[1], $file_type);	# Call Step Counter with "Comment extract mode".
+}
+elsif(($ARGV[0] eq "-d")&&(-f $ARGV[1])){
+	$file_type = file_type_check($ARGV[1]);
+	step_count(3, $ARGV[1], $file_type);	# Call Step Counter with "Debug mode".
+}
+elsif($ARGV[0] eq "-h"){
+	print_help();
+}
+else{
+	print_usage();
+}
+
+
+####################################
+#  print usage
+####################################
+sub print_usage{
+	print <<END_OF_USAGE;
+
+    ===== C Source Step Counter ==========================
+                                     by k.kitamori 2001.9.28
+
+    USAGE :  stepc [ -s | -c ] <file_name>
+             stepc <dir_name>
+             stepc <src_dir> <dst_dir>
+             stepc <@@/CC_LABEL> <dst_dir>
+             stepc -h               <=== Help !!!
+
+END_OF_USAGE
+}
+
+###################################
+# history
+###################################
+# 2001.09.28	一部のソースファイルがカウントされない不具合に対応。
+#		  --> ファイル検査を-T(テキストファイル) から -f(通常ファイル) に変更。
+#
+# 2004.03.11	Pre-Processor Macro によるコメントアウトに対応。
+#		  --> #if 0 ... #else / #endif
+#
+#
+
+
+####################################
+#  print help
+####################################
+sub print_help{
+	open(STDOUT, "| more");
+
+	print_usage();
+
+	print <<END_OF_HELP;
+
+    [Step count mode]
+
+        stepc <file_name>
+        stepc <dir_name> 
+
+        This mode counts the each number of a whole line, the source
+        line, the comment line, and blank line of specified file.
+        When the directory is specified, it counts the each number and
+        total number of all files included in the directory recursively.
+
+        Only the file with the following extensions is considered to be
+        C/C++/ASM source file and includes to the count.
+
+           C/C++ files (*.c  *.cc  *.C  *.h  *.hh  *.ch)
+              <comment format> : /* .... */
+                                 // .......
+                                 #if 0 ...... #else/ #endif
+
+           ASM files (*.s  *.ia)
+              <Comment format> : # .......
+
+        When the file has a specific keyword, it shown with "*" mark
+        in the "Stat" column of output.
+        The default value of a specific keyword is "M_S_X", but you can
+        change it by modify stepc script as follows.
+
+          \$KEYWORD = "M_S_X";
+
+
+    [Difference extract mode]
+
+        stepc <src_dir> <dst_dir> 
+        stepc <@@/CC_LABEL> <dst_dir> 
+
+        This mode extracts the difference between two directories.
+        Please specify the directory before changes for <src_dir>,
+        and the directory after changes for <dst_dir>. 
+        The changed files shown with "C" mark, and the added files
+        shown with "A" mark in the "Stat" column of output.
+
+        The Version Label can be specified instead of directory name
+        for <src_dir> when you on ClearCase View.
+        In that case, it is necessary to give "@@/" to previous of
+        the label according to the format of ClearCase.
+
+          e.g.  stepc @@/M240101K ne_cpu
+
+
+    [Source extract mode]
+
+        stepc -s file_name
+
+        This mode extracts only the source line from C source file.
+        The line number of an original file is shown at the head
+        of the displayed each extraction line.
+
+
+
+    [Comment extract mode]
+
+        stepc -c file_name
+
+        This mode extracts only the comment line from C source file.
+        The line number of an original file is shown at the head
+        of the displayed each extraction line.
+
+
+
+END_OF_HELP
+close(STDOUT);
+}
+
+
+####################################
+#  print form
+#    print_form(form_num)
+#      1: print header for single file
+#      2: print count result for single file
+#      3: print count result for multi files
+#      4: print count result for difference mode
+####################################
+sub print_form{
+	if($_[0] == 1){
+		print "   line  source comment src\&com   space: change    add delete  total   : file name\n";
+		print "---------------------------------------------------------------------------\n";
+	}
+
+	if($_[0] == 2){
+		printf "%7d %7d %7d %7d %7d   : %s\n",
+		$count_all{'lines'}, $count_all{'source'}, $count_all{'comments'}, $count_all{'src_com'}, $count_all{'space'}, $ARGV[0];
+	}
+
+	if($_[0] == 3 || $_[0] == 4){
+		print "\n===========================================================================\n";
+		print "     line  source comment src\&com   space: change    add delete  total   : file name\n";
+		print "---------------------------------------------------------------------------\n";
+		printf "  %7d %7d %7d %7d %7d       -      -      -      -   : <total>\n",
+		$count_all{'lines'}, $count_all{'source'}, $count_all{'comments'}, $count_all{'src_com'}, $count_all{'space'}, $count_all{'mod_a'}, $count_all{'mod_c'}, $count_all{'mod_d'}, $count_all{'mod_t'};
+	}
+
+	if($_[0] == 4){
+		printf "  %7d %7d %7d %7d %7d       -      -      -      -   : <Add total>\n",
+		$count_all{'a_lines'}, $count_all{'a_source'}, $count_all{'a_comments'}, $count_all{'a_src_com'}, $count_all{'a_space'};
+		printf "  %7d %7d %7d %7d %7d  %6d %6d %6d %6d   : <Change total>\n",
+		$count_all{'c_lines'}, $count_all{'c_source'}, $count_all{'c_comments'}, $count_all{'c_src_com'}, $count_all{'c_space'}, $count_all{'mod_a'}, $count_all{'mod_c'}, $count_all{'mod_d'}, $count_all{'mod_t'};
+
+		$new_wc = $count_all{'a_lines'} - $count_all{'a_space'};
+		$mod_wc = $count_all{'c_lines'} - $count_all{'c_space'};
+		$div_wc = $count_all{'lines'} - $count_all{'space'} - $new_wc - $mod_wc;
+		$all_wc = $new_wc + $mod_wc + $div_wc;
+
+		$new_nc = $count_all{'a_source'};
+		$mod_nc = $count_all{'c_source'};
+		$div_nc = $count_all{'source'} - $new_nc - $mod_nc;
+		$all_nc = $new_nc + $mod_nc + $div_nc;
+
+		print "\n     New   Modify  Divert   Total\n";
+		print "----------------------------------------------------\n";
+		printf "  %7d %7d %7d %7d    (with comment)\n",
+		$new_wc, $mod_wc, $div_wc, $all_wc;
+		printf "  %7d %7d %7d %7d    (without comment)\n",
+		$new_nc, $mod_nc, $div_nc, $all_nc;
+		print "\n===========================================================================\n";
+		print "### Modified Line Count Result ###";
+		print "\n     Add   Modify  Delete   Total\n";
+		print "----------------------------------------------------\n";
+		printf "  %7d %7d %7d %7d    (with comment)\n",
+		$count_all{"mod_a"}, $count_all{"mod_c"}, $count_all{"mod_d"}, $count_all{"mod_t"};
+#		$mod_inc_nc = $count_all{"mod_t"} * ($mod_nc / $mod_wc);
+#		printf "  %7d %7d %7d %7d    (without comment)\n",
+#		$new_nc, $mod_nc, $mod_inc_nc, $div_nc, $all_nc;
+		print "----------------------------------------------------\n";
+	}
+
+}
+
+
+###################################################################
+#	Sub Directory Serch
+#	subdir( dst_dir )
+#
+###################################################################
+sub subdir{
+	my($dst_dir) = $_[0];
+	my($file_type);
+	my(%count_file);
+	my(%count_dir);
+	my(%count_subdir);
+	my(%count_all);
+	@count_all{"lines","source","space","comments","src_com",
+			   "a_lines","a_source","a_space","a_comments","a_src_com",
+			   "c_lines","c_source","c_space","c_comments","c_src_com",
+			   "mod_a","mod_c","mod_d","mod_t"}
+		= (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+	%count_dir = %count_all;
+        my(%mod_count_f);
+	my(@dir) = <$dst_dir/*>;
+	my($file);
+	my($file_stat) = " ";
+	my($find);
+	my($key);
+	$count_dir_mod = 0;
+	foreach $file (sort @dir){
+		$file_type = 0;
+		@mod_count_f{ "mod_a","mod_c","mod_d","mod_t"} = (0,0,0,0);
+		if(-f $file){
+			$file_type = file_type_check($file);
+		}
+		if($file_type){
+			if($find == 0){
+				print "\n### $dst_dir ###\n";
+				print "Stat line  source comment src\&com   space: change    add delete  total   : file name\n";
+				print "---------------------------------------------------------------------------\n";
+			}
+			$find = 1;
+			%count_file = step_count(0, $file, $file_type);		# Call Step Counter with "Step count mode".
+
+			if(defined $base_src_dir){
+				if($base_src_dir =~ /^@@\/.+/){
+					$src_file = $file . $base_src_dir;
+				}
+				else{
+					$src_file = substr($file, $base_dst_leng);
+					$src_file = $base_src_dir . $src_file;
+				}
+				if(-e $src_file){
+					if( file_comp( $src_file, $file )){
+						$file_stat = "C";
+
+						$count_dir{"c_lines"} += $count_file{"lines"};
+						$count_dir{"c_source"} += $count_file{"source"};
+						$count_dir{"c_comments"} += $count_file{"comments"};
+						$count_dir{"c_src_com"} += $count_file{"src_com"};
+						$count_dir{"c_space"} += $count_file{"space"};
+# For added line count by T.Yamamoto 04/07/13
+						$dst_file = $file;
+						%mod_count_f = file_diff( $src_file, $dst_file);
+						$count_dir{"mod_a"} += $mod_count_f{"mod_a"};
+						$count_dir{"mod_c"} += $mod_count_f{"mod_c"};
+						$count_dir{"mod_d"} += $mod_count_f{"mod_d"};
+						$count_dir{"mod_t"} += $mod_count_f{"mod_t"};
+					}
+					else{
+						$file_stat = " ";
+					}
+				}
+				else{
+					$file_stat = "A";
+
+					$count_dir{"a_lines"} += $count_file{"lines"};
+					$count_dir{"a_source"} += $count_file{"source"};
+					$count_dir{"a_comments"} += $count_file{"comments"};
+					$count_dir{"a_src_com"} += $count_file{"src_com"};
+					$count_dir{"a_space"} += $count_file{"space"};
+				}
+			}
+			$file =~ s/.*\///; 
+			printf "%1s%1s%7d %7d %7d %7d %7d  %6d %6d %6d %6d   : %s\n",
+			$file_stat, $count_file{'key_flag'}, $count_file{'lines'}, $count_file{'source'}, $count_file{'comments'}, $count_file{'src_com'}, $count_file{'space'}, $mod_count_f{'mod_a'}, $mod_count_f{'mod_c'}, $mod_count_f{'mod_d'}, $mod_count_f{'mod_t'}, $file;
+
+			$count_dir{"lines"} += $count_file{"lines"};
+			$count_dir{"source"} += $count_file{"source"};
+			$count_dir{"comments"} += $count_file{"comments"};
+			$count_dir{"src_com"} += $count_file{"src_com"};
+			$count_dir{"space"} += $count_file{"space"};
+		}
+		if(-d $file){
+			$find = 0;
+			%count_subdir = subdir( $file );
+
+			foreach $key (keys(%count_all)){
+				$count_all{$key} += $count_subdir{$key};
+			}
+		}
+	}
+
+	foreach $key (keys(%count_all)){
+		$count_all{$key} += $count_dir{$key};
+	}
+
+	if($count_dir{"lines"} != 0){
+		if($find == 0){
+			print "\n### $dst_dir ###\n";
+			print "Stat line  source comment src\&com   space : change    add delete  total   : file name\n";
+		}
+		print "---------------------------------------------------------------------------\n";
+		printf "  %7d %7d %7d %7d %7d       -      -      -      -   : <sub total>\n",
+		$count_dir{'lines'}, $count_dir{'source'}, $count_dir{'comments'}, $count_dir{'src_com'}, $count_dir{'space'}, $count_dir{'mod_a'}, $count_dir{'mod_c'}, $count_dir{'mod_d'}, $count_dir{'mod_t'};
+		if($count_dir{"a_lines"} !=0 || $count_dir{"c_lines"} !=0){
+			printf "  %7d %7d %7d %7d %7d       -      -      -      -   : <Add sub total>\n",
+			$count_dir{'a_lines'}, $count_dir{'a_source'}, $count_dir{'a_comments'}, $count_dir{'a_src_com'}, $count_dir{'a_space'};
+			printf "  %7d %7d %7d %7d %7d  %6d %6d %6d %6d   : <Change sub total>\n",
+			$count_dir{'c_lines'}, $count_dir{'c_source'}, $count_dir{'c_comments'}, $count_dir{'c_src_com'}, $count_dir{'c_space'}, $count_dir{'mod_a'}, $count_dir{'mod_c'}, $count_dir{'mod_d'}, $count_dir{'mod_t'};
+		}
+	}
+	return(%count_all);
+}
+
+
+###################################################################
+#	Step Counter for "C" source code
+#	step_count( Mode , File_Name , LANG_type)
+#
+#				Mode = 0 : Step count mode.
+#				Mode = 1 : Source extract mode.
+#				Mode = 2 : Comment extract mode.
+#				Mode = 3 : Debug mode.
+#
+#				File_Name : *.c / *.C / *.h
+#
+#				LANG_type : 1(0) = C/C++ ,  2 = ASM
+#
+###################################################################
+sub step_count{
+	my($mode) = $_[0];
+	my($file_name) = $_[1];
+	my($lang_type) = $_[2];
+	my(%counter);
+	@counter{"lines","source","space","comments","src_com","key_flag"} = (0,0,0,0,0," ");
+	my($com_start) = "\/\*";		# Comment Start Char of C Lang.	
+	my($com_end) = "\*\/";			# Comment End Char of C Lang.
+	my($com_start2) = "\/\/";		# Comment Start Char of C++ Lang.
+	my($com_start_asm) = "\#";		# Comment Start Char of ASM Lang.
+
+	my($com_ing) = 0;				# Inside comment flag. (/* .... */)
+	my($mac_com_ing) = 0;			# Inside comment flag by Pre-Pro Macro (#if 0 ... #else / #endif)
+	my($mac_com_start) = 0;			# Start comment flag by Pre-Pro Macro (#if 0)
+	my($mac_com_end) = 0;			# Finish comment flag by Pre-Pro Macro (#endif)
+	my($src_flag);					# existing source line flag.
+	my($com_flag);					# existing comment line flag.
+	my($pos);
+	my($pos_1);						# Comment start position for '/*'
+	my($pos_2);						# Comment start position for '//'
+	my($pos_end);					# Comment end position for '*/'
+	my($string);					# Source code strings part of line. (before / after / between Comment)
+	my($string_line);				# Total source code strings in the line. (except Comments)
+
+	if($lang_type == 2){
+		$com_start = $com_start_asm;
+		$com_start2 = $com_start_asm;
+	}
+
+	open(IN, $file_name) || die "Can't Open $file_name\n";
+	#print "$file_name\n";	#DEBUG
+	while(<IN>){
+		if(/$KEYWORD/){
+			$counter{"key_flag"} = "*";
+		}
+
+		if(/^\s*$/){
+			++$counter{"space"};
+		}
+		else{
+			$src_flag = 0;
+			$com_flag = 0;
+			$pos = 0;
+			$pos_1 = 0;
+			$pos_2 = 0;
+			$pos_end = 0;
+			$string = "";
+			$string_line = "";
+			while($pos >= 0){
+			## while find char of comment start/end. (exit if not found start/end char in this line.)
+				if($com_ing == 0){
+				### Outside comment stream (find commend start) ###
+					$pos_1 = index $_, $com_start, $pos;	# Get position of comment start char1.(none => -1)
+					$pos_2 = index $_, $com_start2, $pos;	# Get position of comment start char2.(none => -1)
+					if(($pos_1 == -1 )&&($pos_2 == -1)){	# Comment_start was not found.
+						$pos = -1;
+													# Check the source existing or not.
+						$string = substr($_, $pos_end);		# Get strings after comment end.
+						if($string =~ /\S+/){
+							$src_flag = 1;
+							$string_line .= $string;
+						}
+						#chomp($string); print "#1#<$string>#$src_flag#pos_1=$pos_1,pos_2=$pos_2# ";  #DEBUG
+					}
+					else{							# Comment_start was found.
+						if($pos_2 == -1){
+							$pos = $pos_1;
+						}
+						elsif($pos_1 == -1){
+							$pos = $pos_2;	
+						}
+						elsif($pos_1 < $pos_2){
+							$pos = $pos_1;
+						}
+						else{
+							$pos = $pos_2;		# always same $pos_1 and $pos_2 when ASM mode. 
+						}
+						$com_ing = ($pos == $pos_2) ? 0 : 1;	# must chose $pos_2 even if $pos_2==$pos_1.
+						$com_flag = 1;
+													# Check the source existing or not befor Comment.
+						$string = substr($_, $pos_end, ($pos - $pos_end));	# Get strings before comment start.
+						if($string =~ /\S+/){
+							$src_flag = 1;
+							$string_line .= $string;
+						}
+						#chomp($string); print "#2#<$string>#$src_flag#pos_1=$pos_1,pos_2=$pos_2# ";  #DEBUG
+						$pos = ($pos == $pos_2) ? -1 : $pos+2;
+					}
+				}
+				else{
+				### Inside comment stream (find commend end) ###
+					if(($pos = index $_, $com_end, $pos) >= 0){	# Comment_end was found.
+						$com_flag = 1;
+						$com_ing = 0;
+						$pos+=2;
+						$pos_end = $pos;
+					}
+				}
+			}
+
+			### Pre-Processor Macro checking process START ###
+			if($src_flag){
+				if($mac_com_start){
+					$mac_com_ing = 1;
+					$mac_com_start = 0;
+				}
+
+				if($mac_com_ing == 0){
+				## Comment start Macro check ##
+					$mac_com_start =1 if($string_line =~ /^\s*#\s*if\s*0\s*/);		# "#if 0" check
+				}
+				elsif($mac_com_ing == 1){
+				## Comment finish Macro check in same layer as start ##
+					++$mac_com_ing if($string_line =~ /^\s*#\s*if/);				# "#ifxx" check
+					$mac_com_ing = 0 if($string_line =~ /^\s*#\s*else\s*/);			# "#else" check
+					$mac_com_ing = 0 if($string_line =~ /^\s*#\s*endif\s*/);		# "#endif" check
+				}
+				else{
+				## Other Macro start/finish check in Sub layer ##
+					++$mac_com_ing if($string_line =~ /^\s*#\s*if/);				# "#ifxx" check
+					--$mac_com_ing if($string_line =~ /^\s*#\s*endif\s*/);			# "#endif" check
+				}
+
+				if($mac_com_ing){
+					$src_flag = 0;
+					$com_flag = 1;
+				}
+			}
+			### Pre-Processor Macro checking process END   ###
+
+			++$counter{"comments"} if($com_flag || $com_ing);
+			++$counter{"source"} if($src_flag);
+			++$counter{"src_com"} if($src_flag && $com_flag);
+		}
+		++$counter{"lines"};
+
+		if($mode == 1){				# Source extract mode
+			print "$counter{'lines'}\t$_" if($src_flag);
+		}
+		elsif($mode == 2){			# Comment extract mode
+			print "$counter{'lines'}\t$_" if($com_flag);
+		}
+		elsif($mode == 3){			# Debug mode
+			print "$counter{'lines'} $counter{'source'} $counter{'comments'} $counter{'src_com'} $counter{'space'} $mac_com_ing\t$_";
+		}
+	}
+	return(%counter);
+	close(IN);
+}
+
+
+
+#############################################
+#  Format : file_comp(src_file, dst_file)
+#  Return : 0=Same,  1=Not same
+#############################################
+sub file_comp{
+        my($src_file)=$_[0];
+        my($dst_file)=$_[1];
+        my($src_line);
+        my($dst_line);
+
+        open(SRC, $src_file) || die "Can't Open $src_file";
+        open(DST, $dst_file) || die "Can't Open $dst_file";
+        do{
+                $src_line = <SRC>;
+                $dst_line = <DST>;
+                if($src_line ne $dst_line){
+                        close(SRC);
+                        close(DST);
+                        return(1);
+                }
+        }while(defined($src_line));
+        close(SRC);
+        close(DST);
+        return(0);
+}
+
+#############################################
+#  Format : file_type_check( file_name )
+#  Return : 0=Unknown, 1=C/C++, 2=ASM
+#############################################
+sub file_type_check{
+
+	my($file_name)=$_[0];
+	my($file_type)=0;
+
+	if($file_name =~/.*\.[cCh][ch]?$/){
+		$file_type = 1;
+	}
+	elsif($file_name =~/.*\.(s|ia)$/){
+		$file_type = 2;
+	}
+
+	return($file_type);
+}
+
+#############################################
+#  Format : file_diff( src_file, dst_file)
+#  Return : 
+#############################################
+sub file_diff{
+
+	my($src_file)=$_[0];
+	my($dst_file)=$_[1];
+        my($src_line);
+        my($src_line);
+        my(%mod_count_f);
+	@mod_count_f{ "mod_a","mod_c","mod_d","mod_t"} = (0,0,0,0);
+        my(%mod_count);
+	@mod_count{ "mod_a","mod_c","mod_d","mod_t"} = (0,0,0,0);
+	$file_name = substr($dst_file,rindex($dst_file,'/')+1);
+	$t_f_value = 0;
+
+	$diff_temp_org = "/tmp/" . $file_name . "." .$ENV{'USER'};
+	$diff_temp = $diff_temp_org;
+	$no = 1;
+
+	while ( -e $diff_temp ) {
+		$diff_temp = $diff_temp_org . "." . $no;
+		$no ++;
+	}
+
+	system("diff $src_file $dst_file > $diff_temp");
+        open(DIFF, $diff_temp) || die "Can't Open $diff_temp";
+        do{
+                $diff_line = <DIFF>;
+		$diff_1st = substr($diff_line,0,1);
+                if($diff_1st ne ">" && $diff_1st ne "<" && $diff_1st ne "-" && $diff_1st ne "" ){
+			%mod_count = calc_diff ($diff_line);
+			$mod_count_f{"mod_a"} += $mod_count{"mod_a"};
+			$mod_count_f{"mod_c"} += $mod_count{"mod_c"};
+			$mod_count_f{"mod_d"} += $mod_count{"mod_d"};
+			$mod_count_f{"mod_t"} += $mod_count{"mod_t"};
+                }
+        }while(defined($diff_line));
+        close(DIFF);
+	system("rm $diff_temp");
+	$mod_count{"mod_t"} = $mod_count{"mod_c"} + $mod_count{"mod_a"} + $mod_count{"mod_d"};
+
+	return(%mod_count_f);
+}
+
+#############################################
+#  Format : calc_diff( diff_line )
+#  Return : 
+#############################################
+sub calc_diff{
+
+	my($diff_line)=$_[0];
+	my($pre_value);
+	my($post_value);
+        my(%mod_count);
+	@mod_count{ "mod_a","mod_c","mod_d","mod_t"} = (0,0,0,0);
+	$pre_value = 0;
+	$post_value = 0;
+
+	if (index($diff_line,'c') != -1) {
+		$state_ps = index($diff_line,'c');
+		$pre_diff = substr($diff_line,0,$state_ps);
+		$post_diff = substr($diff_line,$state_ps+1);
+		if(($pre_ps = index($pre_diff,',')) != -1){
+			$pre_start = substr($pre_diff,0,$pre_ps);
+			$pre_end = substr($pre_diff,$pre_ps+1);
+			$pre_value = $pre_end - $pre_start;
+		}else {
+			$pre_value = 1;
+		}
+		if(($post_ps = index($post_diff,',')) != -1){
+			$post_start = substr($post_diff,0,$post_ps);
+			$post_end = substr($post_diff,$post_ps+1);
+			$post_value = $post_end - $post_start;
+		}else {
+			$post_value = 1;
+		}
+		if($pre_value >= $post_value) {
+			$mod_count{"mod_c"} += $pre_value;
+		}else {
+			$mod_count{"mod_c"} += $post_value;
+		}
+	} elsif (index($diff_line,'a') != -1) {
+		$state_ps = index($diff_line,'a');
+		$post_diff = substr($diff_line,$state_ps+1);
+		if(($post_ps = index($post_diff,',')) != -1){
+			$post_start = substr($post_diff,0,$post_ps);
+			$post_end = substr($post_diff,$post_ps+1);
+			$post_value = $post_end - $post_start;
+		}else {
+			$post_value = 1;
+		}
+		$mod_count{"mod_a"} += $post_value;
+	} elsif (index($diff_line,'d') != -1) {
+		$state_ps = index($diff_line,'d');
+		$pre_diff = substr($diff_line,0,$state_ps);
+		if(($pre_ps = index($pre_diff,',')) != -1){
+			$pre_start = substr($pre_diff,0,$pre_ps);
+			$pre_end = substr($pre_diff,$pre_ps+1);
+			$pre_value = $pre_end - $pre_start;
+		}else {
+			$pre_value = 1;
+		}
+		$mod_count{"mod_d"} += $pre_value;
+	} else {
+		printf"Unknown code\n";
+	}
+	$mod_count{"mod_t"} = $mod_count{"mod_a"} + $mod_count{"mod_c"} + $mod_count{"mod_d"};
+	return(%mod_count);
+}
